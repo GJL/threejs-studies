@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title></title>
+	<style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+	
+	<script src="../js/three.min.js"></script>
+	<script src="../js/stats.min.js"></script>
+	<script>
+		var stats = new Stats();
+		stats.setMode(1); // 0: fps, 1: ms
+
+		// Align top-left
+		stats.domElement.style.position = 'absolute';
+		stats.domElement.style.left = '0px';
+		stats.domElement.style.top = '0px';
+
+		document.body.appendChild( stats.domElement );
+
+		function Grid3D(xdim, ydim, zdim) {
+			this.xdim = xdim;
+			this.ydim = ydim;
+			this.zdim = zdim;
+			this.multiplier = [xdim * ydim, xdim];
+			this.grid = [xdim * ydim * zdim];
+		};
+
+		Grid3D.prototype.computeIndex = function(x, y, z) {
+			if (x >= this.xdim || y >= this.ydim || z >= this.zdim || x < 0 || y < 0 || z < 0) {
+				throw "Invalid indices " + x + " " + y + " " + z;
+			}
+			var r =  z * this.multiplier[0] + y * this.multiplier[1] + x;
+			return r;
+		};
+		
+		Grid3D.prototype.set = function(x, y, z, val) {
+			this.grid[this.computeIndex(x, y, z)] = val;
+		};
+		
+		Grid3D.prototype.get = function(x, y, z) {
+			return this.grid[this.computeIndex(x, y, z)];
+		};
+
+		Grid3D.prototype.getDims = function() {
+			return {xdim: this.xdim, ydim: this.ydim, zdim: this.zdim};
+		};
+
+		Grid3D.prototype.getNeighbors = function(x, y, z) {
+			var result = []
+			for (xo = -1; xo <= 1; ++xo) {
+				for (yo = -1; yo <= 1; ++yo) {
+					for (zo = -1; zo <= 1; ++zo) {
+						var nx = x + xo;
+						var ny = y + yo;
+						var nz = z + zo;
+						if (
+							nx < 0 || nx >= this.xdim || 
+							ny < 0 || ny >= this.ydim || 
+							nz < 0 || nz >= this.zdim || 
+							(nz ==  z && nx == x && ny ==y)) {
+							continue;
+						}
+						result.push(this.get(nx, ny, nz));
+					}
+				}
+			}
+			return result;
+		};
+
+		function simulateStep(world) {
+			var dims = world.getDims();
+			for (x = 0; x < dims.xdim; ++x) {
+				for (y = 0; y < dims.ydim; ++y) {
+					for (z = 0; z < dims.zdim; ++z) {
+						var worldItem = world.get(x, y, z);
+						worldItem.makeMove();
+					}
+				}
+			}
+		};
+
+		function randChoice(a) {
+			if (a.length == 0) {
+				return null;
+			}
+			return a[Math.floor(Math.random() * a.length)];
+		}
+
+
+		// can be shark, fish, or water
+		// all cramped into one class to avoid object creation
+		function WorldItem(world, x, y, z, type) {
+			if (type == 'SHARK') {
+				this.initShark();
+			} else if (type == 'FISH') {
+				this.initFish();
+			} else if (type == 'WATER') {
+				this.initWater();
+			}
+			var geometry = new THREE.CubeGeometry(1,1,1);
+			THREE.Mesh.call(this, geometry, this.selectedMaterial);
+			this.translateX(x);
+			this.translateY(y);
+			this.translateZ(z);
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.world = world;
+		};
+
+		WorldItem.prototype = Object.create(THREE.Mesh.prototype);
+		WorldItem.prototype.constructor = WorldItem;
+
+		WorldItem.fishBreedTime = 1;
+		WorldItem.sharkBreedTime = 11;
+		WorldItem.sharkStarveTime = 3;
+
+		WorldItem.materials = {};
+		WorldItem.materials['SHARK'] = new THREE.MeshPhongMaterial({color: 0x00ff00, wireframe: false});
+		WorldItem.materials['FISH'] = new THREE.MeshBasicMaterial({color: 0x0000ff, wireframe: true});
+		WorldItem.materials['WATER'] = new THREE.MeshBasicMaterial({transparent: true, opacity: 0});
+
+		WorldItem.prototype.initFish = function() {
+			this.selectedMaterial = this.selectMaterial('FISH');
+			this.breedTime = WorldItem.fishBreedTime;
+			this.type = 'FISH';
+		}
+
+		WorldItem.prototype.initShark = function() {
+			this.selectedMaterial = this.selectMaterial('SHARK');
+			this.breedTime = WorldItem.sharkBreedTime;
+			this.starveTime = WorldItem.sharkStarveTime;
+			this.type = 'SHARK';
+		}
+
+		WorldItem.prototype.initWater = function() {
+			this.selectedMaterial = this.selectMaterial('WATER');
+			this.type = 'WATER';
+		}
+
+		WorldItem.prototype.makeMove = function() {
+			if (this.type == 'FISH') {
+				--this.breedTime;
+				if (this.breedTime <= 0) {
+					var randNeighbor = randChoice(this.findNeighbors('WATER'));
+					if (randNeighbor != null) {
+						this.breedTime = WorldItem.fishBreedTime; // if no neighbors are free, spawn on next occasion
+						randNeighbor.changeType('FISH');
+					}
+				}
+				var randNeighbor = randChoice(this.findNeighbors('WATER'));
+				if (randNeighbor != null) {
+					randNeighbor.changeType('FISH');
+					randNeighbor.breedTime = this.breedTime;
+					this.changeType('WATER');
+				}
+			}  else if (this.type == 'SHARK') {
+				--this.starveTime;
+				if (this.starveTime <= 0) {
+					this.changeType('WATER'); // shark dies
+					return;
+				}
+				--this.breedTime;
+				if (this.breedTime <= 0) {
+					var randWater = randChoice(this.findNeighbors('WATER'));
+					if (randWater != null) {
+						this.breedTime = WorldItem.sharkBreedTime; // if no neighbors are free, spawn shark on next occasion
+						randWater.changeType('SHARK'); 
+					}
+				}
+
+				var randFish = randChoice(this.findNeighbors('FISH'));
+				if (randFish != null) {
+					randFish.changeType('SHARK'); // eat fish
+					randFish.breedTime = this.breedTime;
+					randFish.starveTime = WorldItem.sharkStarveTime;
+					this.changeType('WATER');
+				} else {
+					var randWater = randChoice(this.findNeighbors('WATER'));
+					if (randWater != null) {
+						randWater.changeType('SHARK'); // swim to other location
+						randWater.breedTime = this.breedTime;
+						randWater.starveTime = this.starveTime;
+						this.changeType('WATER');
+					}
+				}
+
+			}
+		};
+
+		WorldItem.prototype.findNeighbors = function(type) {
+			var free = [];
+			var neighbors = this.world.getNeighbors(this.x, this.y, this.z);
+			for (n in neighbors) { 
+				if (neighbors[n].getType() == type) {
+					free.push(neighbors[n]);
+				}
+			}
+			return free;
+		};
+
+		WorldItem.prototype.getType = function() {
+			return this.type;
+		};
+
+		WorldItem.prototype.selectMaterial = function(newtype) {
+			return WorldItem.materials[newtype];
+		};
+		
+		WorldItem.prototype.changeType = function(newtype) {
+			var oldtype = this.type;
+			if (newtype == 'FISH') {
+				this.initFish();
+			} else if (newtype == 'SHARK') {
+				this.initShark();
+			} else if (newtype == 'WATER') {
+				this.initWater();
+			}
+			
+			if (oldtype != newtype) {
+				this.material = this.selectedMaterial;
+			}
+		};
+
+		
+		var xdim = 30;
+		var ydim = 1;
+		var zdim = 30;
+		var world = new Grid3D(xdim, ydim, zdim);
+		var scene = new THREE.Scene();
+		var camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+		var renderer = new THREE.WebGLRenderer();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+		document.body.appendChild(renderer.domElement);
+
+		// add subtle blue ambient lighting
+
+		//var ambientLight = new THREE.AmbientLight(0x404040);
+		//scene.add(ambientLight);
+
+		var directionalLight = new THREE.DirectionalLight(0xffffff);
+		directionalLight.position.set(1, 2, 1).normalize();
+		scene.add(directionalLight);
+
+		camera.position.z = 0;
+		camera.position.y = 20;
+
+		for (x = 0; x < xdim; ++x) {
+			for (y = 0; y < ydim; ++y) {
+				for (z = 0; z < zdim; ++z) {
+					var animal;
+					if (x < 10 == 0) {
+						animal = new WorldItem(world, x, y, z, 'SHARK');
+					} else {
+						animal = new WorldItem(world, x, y, z, 'FISH');
+					}
+					world.set(x, y, z, animal);
+					scene.add(animal);
+				}
+			}
+		}
+
+		var interval = 1;
+		var step = interval;
+		var constant = 0.5;
+		var radius = 20;
+		var target = world.get(Math.floor(xdim/2), Math.floor(ydim/2), Math.floor(zdim/2));
+		var render = function (t) {
+			stats.begin();
+			var elapsedTime = t / 1000;	
+			if (step-- == 0) {
+				simulateStep(world);
+				step = interval;
+			}
+			setTimeout( function() {
+					requestAnimationFrame(render);
+			}, 1000/30);
+			camera.position.x = target.position.x + radius * Math.sin( constant * elapsedTime );         
+			camera.position.z =  target.position.z + radius * Math.cos( constant * elapsedTime );
+			renderer.render(scene, camera);
+			camera.lookAt(target.position)
+			stats.end();
+		};
+		render();
+
+
+
+	</script>
+	</body>
+	</html>
