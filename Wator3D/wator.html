@@ -100,7 +100,7 @@
 			} else if (type == 'WATER') {
 				this.initWater();
 			}
-			var geometry = new THREE.CubeGeometry(1,1,1);
+			var geometry = new THREE.BoxGeometry(1,1,1);
 			THREE.Mesh.call(this, geometry, this.selectedMaterial);
 			this.translateX(x);
 			this.translateY(y);
@@ -109,19 +109,20 @@
 			this.y = y;
 			this.z = z;
 			this.world = world;
+			this.skipInSimulation = false;
 		};
 
 		WorldItem.prototype = Object.create(THREE.Mesh.prototype);
 		WorldItem.prototype.constructor = WorldItem;
 
 		WorldItem.fishBreedTime = 1;
-		WorldItem.sharkBreedTime = 11;
+		WorldItem.sharkBreedTime = 8;
 		WorldItem.sharkStarveTime = 3;
 
 		WorldItem.materials = {};
-		WorldItem.materials['SHARK'] = new THREE.MeshPhongMaterial({color: 0x00ff00, wireframe: false});
-		WorldItem.materials['FISH'] = new THREE.MeshBasicMaterial({color: 0x0000ff, wireframe: true});
-		WorldItem.materials['WATER'] = new THREE.MeshBasicMaterial({transparent: true, opacity: 0});
+		WorldItem.materials['SHARK'] = new THREE.MeshLambertMaterial({color: 0x00ff00, wireframe: false});
+		WorldItem.materials['FISH'] = new THREE.MeshLambertMaterial({color: 0x0000ff, wireframe: true});
+		WorldItem.materials['WATER'] = new THREE.MeshLambertMaterial({transparent: true, opacity: 0});
 
 		WorldItem.prototype.initFish = function() {
 			this.selectedMaterial = this.selectMaterial('FISH');
@@ -142,19 +143,25 @@
 		}
 
 		WorldItem.prototype.makeMove = function() {
+			if (this.skipInSimulation) {
+				this.skipInSimulation = false;
+				return;
+			}
 			if (this.type == 'FISH') {
 				--this.breedTime;
 				if (this.breedTime <= 0) {
-					var randNeighbor = randChoice(this.findNeighbors('WATER'));
-					if (randNeighbor != null) {
+					var randWater = randChoice(this.findNeighbors('WATER'));
+					if (randWater != null) {
 						this.breedTime = WorldItem.fishBreedTime; // if no neighbors are free, spawn on next occasion
-						randNeighbor.changeType('FISH');
+						randWater.changeType('FISH');
+						randWater.skipInSimulation = true;
 					}
 				}
 				var randNeighbor = randChoice(this.findNeighbors('WATER'));
 				if (randNeighbor != null) {
 					randNeighbor.changeType('FISH');
 					randNeighbor.breedTime = this.breedTime;
+					randNeighbor.skipInSimulation = true;
 					this.changeType('WATER');
 				}
 			}  else if (this.type == 'SHARK') {
@@ -169,6 +176,7 @@
 					if (randWater != null) {
 						this.breedTime = WorldItem.sharkBreedTime; // if no neighbors are free, spawn shark on next occasion
 						randWater.changeType('SHARK'); 
+						randWater.skipInSimulation = true;
 					}
 				}
 
@@ -177,6 +185,7 @@
 					randFish.changeType('SHARK'); // eat fish
 					randFish.breedTime = this.breedTime;
 					randFish.starveTime = WorldItem.sharkStarveTime;
+					randFish.skipInSimulation = true;
 					this.changeType('WATER');
 				} else {
 					var randWater = randChoice(this.findNeighbors('WATER'));
@@ -184,6 +193,7 @@
 						randWater.changeType('SHARK'); // swim to other location
 						randWater.breedTime = this.breedTime;
 						randWater.starveTime = this.starveTime;
+						randWater.skipInSimulation = true;
 						this.changeType('WATER');
 					}
 				}
@@ -211,7 +221,6 @@
 		};
 		
 		WorldItem.prototype.changeType = function(newtype) {
-			var oldtype = this.type;
 			if (newtype == 'FISH') {
 				this.initFish();
 			} else if (newtype == 'SHARK') {
@@ -219,10 +228,7 @@
 			} else if (newtype == 'WATER') {
 				this.initWater();
 			}
-			
-			if (oldtype != newtype) {
-				this.material = this.selectedMaterial;
-			}
+			this.material = this.selectedMaterial;
 		};
 
 		
@@ -236,11 +242,6 @@
 		renderer.setSize(window.innerWidth, window.innerHeight);
 		document.body.appendChild(renderer.domElement);
 
-		// add subtle blue ambient lighting
-
-		//var ambientLight = new THREE.AmbientLight(0x404040);
-		//scene.add(ambientLight);
-
 		var directionalLight = new THREE.DirectionalLight(0xffffff);
 		directionalLight.position.set(1, 2, 1).normalize();
 		scene.add(directionalLight);
@@ -251,32 +252,27 @@
 		for (x = 0; x < xdim; ++x) {
 			for (y = 0; y < ydim; ++y) {
 				for (z = 0; z < zdim; ++z) {
-					var animal;
-					if (x < 10 == 0) {
-						animal = new WorldItem(world, x, y, z, 'SHARK');
+					var worldItem;
+					if (x < xdim*2/3 && x > xdim*1/3 && z < zdim*2/3 && z > zdim*1/3) {
+						worldItem = new WorldItem(world, x, y, z, 'SHARK');
 					} else {
-						animal = new WorldItem(world, x, y, z, 'FISH');
+						worldItem = new WorldItem(world, x, y, z, 'FISH');
 					}
-					world.set(x, y, z, animal);
-					scene.add(animal);
+					world.set(x, y, z, worldItem);
+					scene.add(worldItem);
 				}
 			}
 		}
 
-		var interval = 1;
-		var step = interval;
 		var constant = 0.5;
 		var radius = 20;
 		var target = world.get(Math.floor(xdim/2), Math.floor(ydim/2), Math.floor(zdim/2));
 		var render = function (t) {
 			stats.begin();
 			var elapsedTime = t / 1000;	
-			if (step-- == 0) {
-				simulateStep(world);
-				step = interval;
-			}
+			simulateStep(world);
 			setTimeout( function() {
-					requestAnimationFrame(render);
+			requestAnimationFrame(render);
 			}, 1000/30);
 			camera.position.x = target.position.x + radius * Math.sin( constant * elapsedTime );         
 			camera.position.z =  target.position.z + radius * Math.cos( constant * elapsedTime );
@@ -289,5 +285,5 @@
 
 
 	</script>
-	</body>
-	</html>
+</body>
+</html>
